@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Toaster, toast } from "sonner";
+import { read, write, CONTRACT } from "./genlayer";
 
-const CONTRACT = "0xDEB4ED1CDF411354eDAe892f76d8B667b92e7760";
+const ROLE_KEY = "0";
+const APPLICANT = "0x4531c0303a368eeC4dc8ea165edC6F215aA3e2A9";
 
 type Skill = { name: string; weight: number };
 
@@ -24,8 +26,10 @@ const ROLE = {
 type Verdict = {
   handle: string;
   score: number;
+  qualified: boolean;
   matched: string[];
   gaps: string[];
+  reasoning: string;
 };
 
 type Candidate = {
@@ -47,12 +51,50 @@ function scoreColor(s: number) {
   return "#DC2626";
 }
 
+// Contract may return strengths/gaps as an array or a delimited string.
+function toList(v: any): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean);
+  if (typeof v === "string")
+    return v
+      .split(/[\n;,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  return [];
+}
+
 export default function App() {
   const [handle, setHandle] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [verdict, setVerdict] = useState<Verdict | null>(null);
+  const [stats, setStats] = useState<{ total_roles: number; verified: number; rejected: number } | null>(null);
+  const [roleInfo, setRoleInfo] = useState<{ applicants: number; verified: number } | null>(null);
 
-  function verify(e: React.FormEvent) {
+  // Load real on-chain stats + role info on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const s: any = await read("stats");
+        setStats({
+          total_roles: Number(s?.total_roles ?? 0),
+          verified: Number(s?.verified ?? 0),
+          rejected: Number(s?.rejected ?? 0),
+        });
+      } catch (e: any) {
+        toast.error("Could not load contract stats", { description: e?.message ?? String(e) });
+      }
+      try {
+        const r: any = await read("get_role", [ROLE_KEY]);
+        setRoleInfo({
+          applicants: Number(r?.applicants ?? 0),
+          verified: Number(r?.verified ?? 0),
+        });
+      } catch {
+        /* non-fatal */
+      }
+    })();
+  }, []);
+
+  async function verify(e: React.FormEvent) {
     e.preventDefault();
     const h = handle.trim().replace(/^@/, "");
     if (!h) {
@@ -62,25 +104,42 @@ export default function App() {
     if (verifying) return;
     setVerdict(null);
     setVerifying(true);
-    toast.loading("Pulling on-chain attestations…", { id: "verify" });
+    toast.loading("Submitting application on-chain — this can take 30–60s…", { id: "verify" });
 
-    setTimeout(() => {
-      const seed = h.length;
-      const score = 58 + ((seed * 7) % 41); // 58..98
-      const pool = [
-        "Solidity",
-        "TypeScript",
-        "Security / Audits",
-        "Open Source Footprint",
-        "Systems Design",
-      ];
-      const cut = 2 + (seed % 3);
-      const matched = pool.slice(0, cut);
-      const gaps = pool.slice(cut);
-      setVerdict({ handle: h, score, matched, gaps });
+    try {
+      await write("apply", [ROLE_KEY, h, "", ""]);
+      const app: any = await read("get_application", [ROLE_KEY, APPLICANT]);
+      const score = Number(app?.score ?? 0);
+      const v: Verdict = {
+        handle: String(app?.github_username || h),
+        score,
+        qualified: !!app?.qualified,
+        matched: toList(app?.strengths),
+        gaps: toList(app?.gaps),
+        reasoning: String(app?.reasoning ?? ""),
+      };
+      setVerdict(v);
+
+      // refresh on-chain counts
+      try {
+        const s: any = await read("stats");
+        setStats({
+          total_roles: Number(s?.total_roles ?? 0),
+          verified: Number(s?.verified ?? 0),
+          rejected: Number(s?.rejected ?? 0),
+        });
+        const r: any = await read("get_role", [ROLE_KEY]);
+        setRoleInfo({ applicants: Number(r?.applicants ?? 0), verified: Number(r?.verified ?? 0) });
+      } catch {
+        /* non-fatal */
+      }
+
+      toast.success(`Verified @${v.handle} · score ${score}/100`, { id: "verify" });
+    } catch (err: any) {
+      toast.error("Verification failed", { id: "verify", description: err?.message ?? String(err) });
+    } finally {
       setVerifying(false);
-      toast.success(`Verified @${h} · score ${score}/100`, { id: "verify" });
-    }, 3000);
+    }
   }
 
   return (
@@ -99,9 +158,16 @@ export default function App() {
               <p className="text-xs text-slate-500">Applicant Review Console</p>
             </div>
           </div>
-          <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-mono text-slate-500 sm:flex">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            {CONTRACT.slice(0, 10)}…{CONTRACT.slice(-6)}
+          <div className="flex items-center gap-3">
+            {stats && (
+              <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-500 md:flex">
+                {stats.total_roles} roles · {stats.verified} verified · {stats.rejected} rejected
+              </div>
+            )}
+            <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-mono text-slate-500 sm:flex">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              {CONTRACT.slice(0, 10)}…{CONTRACT.slice(-6)}
+            </div>
           </div>
         </div>
       </header>
@@ -127,6 +193,12 @@ export default function App() {
             <p className="mt-4 text-sm leading-relaxed text-slate-600">
               {ROLE.blurb}
             </p>
+
+            {roleInfo && (
+              <p className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-xs font-mono text-slate-500">
+                on-chain · {roleInfo.applicants} applicants · {roleInfo.verified} verified
+              </p>
+            )}
 
             <h2 className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-400">
               Requirements &amp; Skill Weights
@@ -175,7 +247,8 @@ export default function App() {
                     value={handle}
                     onChange={(e) => setHandle(e.target.value)}
                     placeholder="github-handle"
-                    className="w-full bg-transparent px-2 py-3 text-sm outline-none placeholder:text-slate-400"
+                    disabled={verifying}
+                    className="w-full bg-transparent px-2 py-3 text-sm outline-none placeholder:text-slate-400 disabled:opacity-60"
                   />
                 </div>
                 <button
@@ -235,7 +308,7 @@ export default function App() {
                             @{verdict.handle}
                           </p>
                           <p className="text-xs text-slate-500">
-                            Assessed for {ROLE.title}
+                            {verdict.qualified ? "Qualified" : "Below bar"} · {ROLE.title}
                           </p>
                         </div>
                       </div>
@@ -262,6 +335,9 @@ export default function App() {
                           Strengths
                         </p>
                         <div className="mt-2 flex flex-wrap gap-2">
+                          {verdict.matched.length === 0 && (
+                            <span className="text-xs text-slate-400">None reported.</span>
+                          )}
                           {verdict.matched.map((m) => (
                             <span
                               key={m}
@@ -293,6 +369,17 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+
+                    {verdict.reasoning && (
+                      <div className="mt-5 border-t border-slate-100 pt-4">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          Assessment
+                        </p>
+                        <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+                          {verdict.reasoning}
+                        </p>
+                      </div>
+                    )}
                   </motion.div>
                 )}
 
