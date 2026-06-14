@@ -36,14 +36,6 @@ Hiring in DAOs is broken. Either you trust a single person's judgment, or you re
 
 - **GenLayer (Bradbury):** `0xDEB4ED1CDF411354eDAe892f76d8B667b92e7760`
 
-## Test results
-
-Role: "Senior Rust Developer" (3+ years Rust, open source, tokio, blockchain)
-
-| Candidate | Score | Verdict | Key finding |
-|-----------|-------|---------|-------------|
-| dtolnay | 90/100 | ✅ Qualified | "Maintainer of serde, syn, cxx. 121 repos. Deep Rust internals." Gaps: no tokio/blockchain evidence |
-
 ## Structure
 
 - `genlayer/` — Intelligent contract: role creation, application with GitHub fetch, AI scoring
