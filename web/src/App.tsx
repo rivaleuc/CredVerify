@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Toaster, toast } from "sonner";
-import { read, write, CONTRACT } from "./genlayer";
+import { read, write, CONTRACT, connectWallet, isWalletConnected } from "./genlayer";
 
 const ROLE_KEY = "0";
 const APPLICANT = "0x4531c0303a368eeC4dc8ea165edC6F215aA3e2A9";
@@ -68,6 +68,17 @@ export default function App() {
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [stats, setStats] = useState<{ total_roles: number; verified: number; rejected: number } | null>(null);
   const [roleInfo, setRoleInfo] = useState<{ applicants: number; verified: number } | null>(null);
+  const [wallet, setWallet] = useState<string | null>(null);
+
+  async function handleConnect() {
+    try {
+      const addr = await connectWallet();
+      setWallet(addr);
+      toast.success("Wallet connected", { description: `${addr.slice(0, 6)}…${addr.slice(-4)}` });
+    } catch (e: any) {
+      toast.error("Wallet connection failed", { description: e?.message ?? String(e) });
+    }
+  }
 
   // Load real on-chain stats + role info on mount
   useEffect(() => {
@@ -168,6 +179,17 @@ export default function App() {
               <span className="h-2 w-2 rounded-full bg-emerald-500" />
               {CONTRACT.slice(0, 10)}…{CONTRACT.slice(-6)}
             </div>
+            <button
+              onClick={handleConnect}
+              className={
+                "rounded-full px-4 py-1.5 text-xs font-semibold shadow-sm transition " +
+                ((wallet ?? isWalletConnected())
+                  ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "bg-[#4F46E5] text-white hover:bg-indigo-700")
+              }
+            >
+              {wallet ? `${wallet.slice(0, 6)}…${wallet.slice(-4)}` : "Connect Wallet"}
+            </button>
           </div>
         </div>
       </header>
