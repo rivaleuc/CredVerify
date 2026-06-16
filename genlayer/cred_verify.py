@@ -5,6 +5,55 @@ from genlayer import *
 MAX_PROFILE_CHARS = 5000
 
 
+# ----------------------------------------------------------------------
+# Pure deterministic helpers (no LLM / no I/O) — unit-testable and shared by
+# leader (derive) and validators (recompute). The qualification invariant is
+# anchored to the role's min_score, never to free-form LLM text.
+# ----------------------------------------------------------------------
+
+def _coerce_int(value, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_cred_verdict(data: dict, min_score: int) -> dict:
+    """Clamp score to [0,100] and DERIVE qualified == (score >= min_score)."""
+    score = max(0, min(100, _coerce_int(data.get("score"), 0)))
+    reasoning = str(data.get("reasoning") or "").strip() or "no reasoning provided"
+    return {
+        "score": score,
+        "qualified": bool(score >= min_score),
+        "strengths": str(data.get("strengths") or "").strip() or "none noted",
+        "gaps": str(data.get("gaps") or "").strip() or "none noted",
+        "reasoning": reasoning,
+    }
+
+
+def validate_cred_verdict(data: dict, min_score: int) -> bool:
+    """Deterministic anchor: score range + qualified == (score >= min_score)
+    + non-empty reasoning."""
+    score = data.get("score")
+    if not isinstance(score, int) or isinstance(score, bool):
+        return False
+    if score < 0 or score > 100:
+        return False
+    qualified = data.get("qualified")
+    if not isinstance(qualified, bool):
+        return False
+    if qualified != (score >= min_score):
+        return False
+    reasoning = data.get("reasoning")
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        return False
+    return True
+
+
 class CredVerify(gl.Contract):
     owner: str
     roles: TreeMap[str, str]          # role_key -> JSON role definition
@@ -155,23 +204,16 @@ Reply ONLY valid JSON:
 No markdown, no code fences."""
 
             raw = gl.nondet.exec_prompt(prompt, response_format="json")
-            if isinstance(raw, dict):
-                return json.dumps(raw)
-            return str(raw).strip()
+            data = raw if isinstance(raw, dict) else json.loads(str(raw).strip())
+            # Derive qualified from score vs min_score so honest leaders pass.
+            return json.dumps(normalize_cred_verdict(data, min_score))
 
         def validator_fn(leader_result) -> bool:
             if not isinstance(leader_result, gl.vm.Return):
                 return False
             try:
                 data = json.loads(leader_result.calldata)
-                score = data.get("score")
-                if not isinstance(score, int) or score < 0 or score > 100:
-                    return False
-                if not isinstance(data.get("qualified"), bool):
-                    return False
-                if not isinstance(data.get("reasoning"), str):
-                    return False
-                return True
+                return validate_cred_verdict(data, min_score)
             except Exception:
                 return False
 
